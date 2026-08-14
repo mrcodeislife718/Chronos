@@ -117,10 +117,10 @@ export class ReleaseStore {
     return [...this.releases.values()]
       .filter((r) => (!app || r.app === app) && (!environment || r.environment === environment) && (!channel || r.channel === channel))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-      .map(structuredClone);
+      .map((release) => structuredClone(release));
   }
 
-  auditLog() { return this.audit.map(structuredClone); }
+  auditLog() { return this.audit.map((entry) => structuredClone(entry)); }
 
   #release(id) {
     const value = this.releases.get(id);
