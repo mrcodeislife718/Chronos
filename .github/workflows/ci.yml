@@ -1,0 +1,21 @@
+name: Chronos CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    env:
+      CHRONOS_CONTAINER_TEST: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: docker pull alpine:3.20
+      - run: npm test
