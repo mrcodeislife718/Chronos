@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createBuildManifest, createArtifact } from '../src/index.js';
-import { BuildRunner, FileArtifactStore, createPreviewServer, SigningVault, createSignedBuild, UpdateService, PolicyEngine, AuditLog, RunnerRegistry } from '../src/cloud.js';
+import { BuildRunner, FileArtifactStore, createPreviewServer, SigningVault, createSignedBuild, canonicalSigningPayload, UpdateService, PolicyEngine, AuditLog, RunnerRegistry } from '../src/cloud.js';
 
 test('artifact store, signing, update channels, policies, audit, and private runners work', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'chronos-store-'));
@@ -15,7 +15,7 @@ test('artifact store, signing, update channels, policies, audit, and private run
 
   const vault = new SigningVault(); vault.create('release');
   const signed = createSignedBuild({ artifact, keyName:'release', vault, platform:'android' });
-  const canonical = JSON.stringify({ artifactDigest: artifact.digest, app: artifact.app, version: artifact.version, target: artifact.target, platform:'android', credentialsRef:null });
+  const canonical = canonicalSigningPayload(signed);
   assert.equal(vault.verify('release', canonical, signed.signature), true);
 
   const updates = new UpdateService();
