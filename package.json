@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "Chronos build, deployment, rollout, and update control plane for Cannon applications.",
   "type": "module",
-  "exports": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./cloud": "./src/cloud.js"
+  },
   "scripts": { "test": "node --test" },
   "engines": { "node": ">=20" },
   "license": "MIT"
