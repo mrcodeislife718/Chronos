@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.js",
     "./cloud": "./src/cloud.js",
-    "./deployment": "./src/deployment.js"
+    "./deployment": "./src/deployment.js",
+    "./persistence": "./src/persistence.js"
   },
   "scripts": { "test": "node --test" },
   "engines": { "node": ">=20" },
