@@ -62,14 +62,60 @@ export class DeploymentOrchestrator {
 
 export function createOtaManifest({app,channel='stable',runtimeVersion,artifactDigest:artifact,assets=[],eligibility={},sequence=1}){
   const body={protocol:'chronos-ota/1',app,channel,runtimeVersion,artifactDigest:artifact,assets:assets.map((asset)=>structuredClone(asset)),eligibility:structuredClone(eligibility),sequence};
+  const validation=validateOtaManifest(body);
+  if(!validation.ok)throw new TypeError(validation.reason);
   return Object.freeze({...body,digest:artifactDigest(body)});
 }
-export function signOtaManifest(manifest,vault,keyName){const payload=JSON.stringify(sortObject(manifest));return{manifest:structuredClone(manifest),keyName,signature:vault.sign(keyName,payload)};}
-export function verifyOtaManifest(signed,vault){if(signed?.manifest?.protocol!=='chronos-ota/1')return false;const {digest,...body}=signed.manifest;if(artifactDigest(body)!==digest)return false;return vault.verify(signed.keyName,JSON.stringify(sortObject(signed.manifest)),signed.signature);}
+export function signOtaManifest(manifest,vault,keyName){
+  const validation=validateOtaManifest(manifest);
+  if(!validation.ok)throw new TypeError(validation.reason);
+  if(typeof vault?.sign!=='function')throw new TypeError('OTA signing vault must provide sign()');
+  const payload=JSON.stringify(sortObject(manifest));
+  return{manifest:structuredClone(manifest),keyName,signature:vault.sign(keyName,payload)};
+}
+export function verifyOtaManifest(signed,vault){
+  const validation=validateOtaManifest(signed?.manifest);
+  if(!validation.ok||typeof signed?.keyName!=='string'||!signed.keyName||typeof signed?.signature!=='string'||!signed.signature||typeof vault?.verify!=='function')return false;
+  const {digest,...body}=signed.manifest;
+  if(typeof digest!=='string'||artifactDigest(body)!==digest)return false;
+  try{return Boolean(vault.verify(signed.keyName,JSON.stringify(sortObject(signed.manifest)),signed.signature));}catch{return false;}
+}
 
 export class UpdateClient {
-  constructor({runtimeVersion,platform,appVersion,verify}){this.runtimeVersion=runtimeVersion;this.platform=platform;this.appVersion=appVersion;this.verify=verify;this.sequence=0;}
-  accept(signed){if(!this.verify(signed))return{accepted:false,reason:'signature'};const update=signed.manifest;if(update.sequence<=this.sequence)return{accepted:false,reason:'replay'};if(update.runtimeVersion&&update.runtimeVersion!==this.runtimeVersion)return{accepted:false,reason:'runtime'};if(update.eligibility?.platforms&&!update.eligibility.platforms.includes(this.platform))return{accepted:false,reason:'platform'};this.sequence=update.sequence;return{accepted:true,artifactDigest:update.artifactDigest,assets:structuredClone(update.assets)};}
+  constructor({runtimeVersion,platform,appVersion,verify}){
+    if(typeof verify!=='function')throw new TypeError('UpdateClient requires verify()');
+    if(typeof runtimeVersion!=='string'||!runtimeVersion)throw new TypeError('UpdateClient requires runtimeVersion');
+    if(typeof platform!=='string'||!platform)throw new TypeError('UpdateClient requires platform');
+    if(typeof appVersion!=='string'||!appVersion)throw new TypeError('UpdateClient requires appVersion');
+    this.runtimeVersion=runtimeVersion;this.platform=platform;this.appVersion=appVersion;this.verify=verify;this.sequence=0;
+  }
+  accept(signed){
+    if(!this.verify(signed))return{accepted:false,reason:'signature'};
+    const update=signed?.manifest;
+    const validation=validateOtaManifest(update);
+    if(!validation.ok)return{accepted:false,reason:'manifest'};
+    if(update.sequence<=this.sequence)return{accepted:false,reason:'replay'};
+    if(update.runtimeVersion&&update.runtimeVersion!==this.runtimeVersion)return{accepted:false,reason:'runtime'};
+    if(update.eligibility?.platforms&&!update.eligibility.platforms.includes(this.platform))return{accepted:false,reason:'platform'};
+    this.sequence=update.sequence;
+    return{accepted:true,artifactDigest:update.artifactDigest,assets:structuredClone(update.assets)};
+  }
+}
+
+function validateOtaManifest(manifest){
+  if(!manifest||manifest.protocol!=='chronos-ota/1')return{ok:false,reason:'OTA manifest protocol must be chronos-ota/1'};
+  if(typeof manifest.app!=='string'||!manifest.app)return{ok:false,reason:'OTA manifest requires app'};
+  if(typeof manifest.channel!=='string'||!manifest.channel)return{ok:false,reason:'OTA manifest requires channel'};
+  if(manifest.runtimeVersion!=null&&(typeof manifest.runtimeVersion!=='string'||!manifest.runtimeVersion))return{ok:false,reason:'OTA runtimeVersion must be a non-empty string when provided'};
+  if(typeof manifest.artifactDigest!=='string'||!manifest.artifactDigest)return{ok:false,reason:'OTA manifest requires artifactDigest'};
+  if(!Number.isSafeInteger(manifest.sequence)||manifest.sequence<1)return{ok:false,reason:'OTA sequence must be a positive safe integer'};
+  if(!Array.isArray(manifest.assets))return{ok:false,reason:'OTA assets must be an array'};
+  for(const asset of manifest.assets){
+    if(!asset||typeof asset!=='object'||typeof asset.path!=='string'||!asset.path||typeof asset.digest!=='string'||!asset.digest)return{ok:false,reason:'OTA assets require non-empty path and digest'};
+  }
+  if(!manifest.eligibility||typeof manifest.eligibility!=='object'||Array.isArray(manifest.eligibility))return{ok:false,reason:'OTA eligibility must be an object'};
+  if(manifest.eligibility.platforms!=null&&(!Array.isArray(manifest.eligibility.platforms)||manifest.eligibility.platforms.some((value)=>typeof value!=='string'||!value)))return{ok:false,reason:'OTA eligibility platforms must be non-empty strings'};
+  return{ok:true,reason:null};
 }
 function sortObject(value){if(Array.isArray(value))return value.map(sortObject);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map((key)=>[key,sortObject(value[key])]));return value;}
 function serializeErrors(errors){return errors.map((error)=>({name:error?.name??'Error',message:error?.message??String(error)}));}
