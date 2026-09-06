@@ -13,15 +13,43 @@ export class DeploymentOrchestrator {
   constructor({store,deployReplica,removeReplica,healthCheck,audit=()=>{}}={}){if(!store)throw new Error('release store required');for(const [name,fn] of Object.entries({deployReplica,removeReplica,healthCheck}))if(typeof fn!=='function')throw new TypeError(`${name} must be a function`);this.store=store;this.deployReplica=deployReplica;this.removeReplica=removeReplica;this.healthCheck=healthCheck;this.audit=audit;}
   async rollout(release,{replicas=1,minimumHealthyPercent=100}={}){
     const plan=planRollout(release,replicas);const deployed=[];const phases=[];
-    for(const phase of plan){
-      const desired=phase.replicas;while(deployed.length<desired){const slot=await this.deployReplica(release,{index:deployed.length,phase});deployed.push(slot);}
-      const checks=await Promise.all(deployed.map((slot)=>this.healthCheck(slot,release)));
-      const healthy=checks.filter(Boolean).length;const percent=deployed.length?healthy/deployed.length*100:0;
-      phases.push({phase:phase.phase,deployed:deployed.length,healthy,healthyPercent:percent});
-      await this.audit({type:'rollout.phase',releaseId:release.id,...phases.at(-1)});
-      if(percent<minimumHealthyPercent){for(const slot of [...deployed].reverse())await this.removeReplica(slot,release);this.store.recordHealth(release.id,{healthy:false,healthyPercent:percent,details:{phase:phase.phase}});await this.audit({type:'rollout.rollback',releaseId:release.id,reason:'health-gate'});return{ok:false,rolledBack:true,phases};}
+    try {
+      for(const phase of plan){
+        const desired=phase.replicas;
+        while(deployed.length<desired){
+          const slot=await this.deployReplica(release,{index:deployed.length,phase});
+          if(slot==null)throw new Error(`deployReplica returned no slot for replica ${deployed.length}`);
+          deployed.push(slot);
+        }
+        const checks=await Promise.all(deployed.map((slot)=>this.healthCheck(slot,release)));
+        const healthy=checks.filter(Boolean).length;const percent=deployed.length?healthy/deployed.length*100:0;
+        phases.push({phase:phase.phase,deployed:deployed.length,healthy,healthyPercent:percent});
+        await this.audit({type:'rollout.phase',releaseId:release.id,...phases.at(-1)});
+        if(percent<minimumHealthyPercent){
+          const cleanupErrors=await this.#removeAll(deployed,release);
+          this.store.recordHealth(release.id,{healthy:false,healthyPercent:percent,details:{phase:phase.phase,cleanupErrors:serializeErrors(cleanupErrors)}});
+          await this.audit({type:'rollout.rollback',releaseId:release.id,reason:'health-gate',cleanupErrors:serializeErrors(cleanupErrors)});
+          return{ok:false,rolledBack:true,phases,cleanupErrors};
+        }
+      }
+      this.store.recordHealth(release.id,{healthy:true,healthyPercent:100,details:{phases:phases.length}});
+      const active=this.store.promote(release.id,minimumHealthyPercent);
+      return{ok:true,rolledBack:false,active,phases,deployed};
+    } catch (error) {
+      const cleanupErrors=await this.#removeAll(deployed,release);
+      try { this.store.recordHealth(release.id,{healthy:false,healthyPercent:0,details:{phase:phases.at(-1)?.phase??null,failure:error?.message??String(error),cleanupErrors:serializeErrors(cleanupErrors)}}); } catch {}
+      try { await this.audit({type:'rollout.rollback',releaseId:release.id,reason:'exception',error:{name:error?.name??'Error',message:error?.message??String(error)},cleanupErrors:serializeErrors(cleanupErrors)}); } catch (auditError) { cleanupErrors.push(auditError); }
+      if(cleanupErrors.length) error.cleanupErrors=cleanupErrors;
+      throw error;
     }
-    this.store.recordHealth(release.id,{healthy:true,healthyPercent:100,details:{phases:phases.length}});const active=this.store.promote(release.id,minimumHealthyPercent);return{ok:true,rolledBack:false,active,phases,deployed};
+  }
+  async #removeAll(deployed,release){
+    const errors=[];
+    for(const slot of [...deployed].reverse()){
+      try{await this.removeReplica(slot,release);}catch(error){errors.push(error);}
+    }
+    deployed.length=0;
+    return errors;
   }
 }
 
@@ -37,3 +65,4 @@ export class UpdateClient {
   accept(signed){if(!this.verify(signed))return{accepted:false,reason:'signature'};const update=signed.manifest;if(update.sequence<=this.sequence)return{accepted:false,reason:'replay'};if(update.runtimeVersion&&update.runtimeVersion!==this.runtimeVersion)return{accepted:false,reason:'runtime'};if(update.eligibility?.platforms&&!update.eligibility.platforms.includes(this.platform))return{accepted:false,reason:'platform'};this.sequence=update.sequence;return{accepted:true,artifactDigest:update.artifactDigest,assets:structuredClone(update.assets)};}
 }
 function sortObject(value){if(Array.isArray(value))return value.map(sortObject);if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map((key)=>[key,sortObject(value[key])]));return value;}
+function serializeErrors(errors){return errors.map((error)=>({name:error?.name??'Error',message:error?.message??String(error)}));}
