@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { createArtifact, ReleaseStore } from '../src/index.js';
 import { DeploymentOrchestrator } from '../src/deployment.js';
 
-function candidate(store, version = '9.0.0') {
+function candidate(store, version = '9.0.0', strategy = 'canary') {
   const artifact = createArtifact({ app:'proof', version, target:'web', files:[{ path:'app.js', content:version }] });
   store.putArtifact(artifact);
-  return store.createRelease({ artifactDigest:artifact.digest, environment:{ name:'prod', replicas:3, strategy:'canary' }, strategy:'canary' });
+  return store.createRelease({ artifactDigest:artifact.digest, environment:{ name:'prod', replicas:3, strategy }, strategy });
 }
 
 test('Chronos removes already-created replicas when deployment throws mid-phase', async () => {
@@ -50,7 +50,7 @@ test('Chronos removes replicas when a health check throws', async () => {
 
 test('Chronos attempts every rollback removal even if one cleanup operation fails', async () => {
   const store = new ReleaseStore();
-  const release = candidate(store, '9.2.0');
+  const release = candidate(store, '9.2.0', 'blue-green');
   const attempted = [];
   const orchestrator = new DeploymentOrchestrator({
     store,
@@ -60,7 +60,7 @@ test('Chronos attempts every rollback removal even if one cleanup operation fail
   });
   const result = await orchestrator.rollout(release, { replicas:3 });
   assert.equal(result.ok, false);
-  assert.deepEqual(attempted, ['slot-0']);
-  // Canary phase fails after its first replica; cleanup failure is surfaced rather than hidden.
-  assert.equal(result.cleanupErrors.length, 0);
+  assert.deepEqual(attempted, ['slot-2','slot-1','slot-0']);
+  assert.equal(result.cleanupErrors.length, 1);
+  assert.match(result.cleanupErrors[0].message, /remove failed/);
 });
