@@ -8,7 +8,8 @@
     "./cloud": "./src/cloud.js",
     "./deployment": "./src/deployment.js",
     "./persistence": "./src/persistence.js",
-    "./recovery": "./src/disaster-recovery.js"
+    "./recovery": "./src/disaster-recovery.js",
+    "./release-recovery": "./src/release-disaster-recovery.js"
   },
   "scripts": { "test": "node --test" },
   "engines": { "node": ">=20" },
