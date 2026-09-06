@@ -2,11 +2,18 @@ import crypto from 'node:crypto';
 import { planRollout, artifactDigest } from './index.js';
 
 export class SecretVault {
-  constructor(masterKey = crypto.randomBytes(32)) { this.key=Buffer.from(masterKey); if(this.key.length!==32) throw new Error('SecretVault requires 32-byte key'); this.records=new Map(); }
-  put(name,value){const iv=crypto.randomBytes(12);const cipher=crypto.createCipheriv('aes-256-gcm',this.key,iv);const plaintext=Buffer.from(value);const ciphertext=Buffer.concat([cipher.update(plaintext),cipher.final()]);plaintext.fill(0);const tag=cipher.getAuthTag();this.records.set(name,{iv,ciphertext,tag});return name;}
-  async withSecret(name,work){const record=this.records.get(name);if(!record)throw new Error(`unknown credential: ${name}`);const decipher=crypto.createDecipheriv('aes-256-gcm',this.key,record.iv);decipher.setAuthTag(record.tag);const secret=Buffer.concat([decipher.update(record.ciphertext),decipher.final()]);try{return await work(secret);}finally{secret.fill(0);}}
-  delete(name){const record=this.records.get(name);if(!record)return false;record.ciphertext.fill(0);record.tag.fill(0);record.iv.fill(0);return this.records.delete(name);}
-  close(){for(const name of [...this.records.keys()])this.delete(name);this.key.fill(0);}
+  constructor(masterKey = crypto.randomBytes(32)) {
+    this.key=Buffer.from(masterKey);
+    if(this.key.length!==32)throw new Error('SecretVault requires 32-byte key');
+    this.records=new Map();
+    this.closed=false;
+  }
+  put(name,value){this.#assertOpen();const iv=crypto.randomBytes(12);const cipher=crypto.createCipheriv('aes-256-gcm',this.key,iv);const plaintext=Buffer.from(value);try{const ciphertext=Buffer.concat([cipher.update(plaintext),cipher.final()]);const tag=cipher.getAuthTag();const previous=this.records.get(name);if(previous)this.#zeroizeRecord(previous);this.records.set(name,{iv,ciphertext,tag});return name;}finally{plaintext.fill(0);}}
+  async withSecret(name,work){this.#assertOpen();if(typeof work!=='function')throw new TypeError('withSecret requires a callback');const record=this.records.get(name);if(!record)throw new Error(`unknown credential: ${name}`);const decipher=crypto.createDecipheriv('aes-256-gcm',this.key,record.iv);decipher.setAuthTag(record.tag);const secret=Buffer.concat([decipher.update(record.ciphertext),decipher.final()]);try{return await work(secret);}finally{secret.fill(0);}}
+  delete(name){this.#assertOpen();const record=this.records.get(name);if(!record)return false;this.#zeroizeRecord(record);return this.records.delete(name);}
+  close(){if(this.closed)return;for(const record of this.records.values())this.#zeroizeRecord(record);this.records.clear();this.key.fill(0);this.closed=true;}
+  #zeroizeRecord(record){record.ciphertext.fill(0);record.tag.fill(0);record.iv.fill(0);}
+  #assertOpen(){if(this.closed)throw new Error('SecretVault is closed');}
 }
 
 export class DeploymentOrchestrator {
